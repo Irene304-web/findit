@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/streamlit-component-lib.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 4px 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .capture-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 52px;
+      padding: 14px 20px;
+      font-size: 17px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .capture-btn:active { opacity: 0.88; }
+    .hint {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #6b7280;
+      text-align: center;
+      line-height: 1.4;
+    }
+    #preview {
+      display: none;
+      width: 100%;
+      margin-top: 12px;
+      border-radius: 12px;
+      object-fit: cover;
+    }
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+  <label class="capture-btn" for="camInput">📷 点击拍照</label>
+  <input
+    type="file"
+    id="camInput"
+    accept="image/*"
+    capture="environment"
+  />
+  <div class="hint">手机将询问是否允许使用摄像头，请选择「允许」</div>
+  <img id="preview" alt="已拍摄预览" />
+  <script>
+    const input = document.getElementById("camInput");
+    const preview = document.getElementById("preview");
+
+    function sendHeight() {
+      const h = document.body.scrollHeight + 8;
+      Streamlit.setFrameHeight(h);
+    }
+
+    input.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        preview.src = reader.result;
+        preview.style.display = "block";
+        Streamlit.setComponentValue(reader.result);
+        sendHeight();
+      };
+      reader.readAsDataURL(file);
+    });
+
+    Streamlit.setFrameHeight(100);
+  </script>
+</body>
+</html>

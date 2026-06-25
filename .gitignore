@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+find_goods.db
+saved_images/
+.venv/
+__pycache__/
+*.pyc

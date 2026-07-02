@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import re
 from pathlib import Path
 
 import streamlit.components.v1 as components

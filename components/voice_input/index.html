@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      margin: 0; padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    }
+    .voice-btn {
+      width: 100%;
+      min-height: 44px;
+      padding: 12px 16px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #111827;
+      font-size: 16px;
+      font-weight: 500;
+      text-align: center;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .voice-btn.recording {
+      background: #fef2f2;
+      color: #b91c1c;
+      border-color: #fecaca;
+    }
+    .hint {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #9ca3af;
+      text-align: center;
+    }
+    .hint.error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <button class="voice-btn" id="voiceBtn" type="button">语音识别</button>
+  <div class="hint" id="hint">点击开始录音，再次点击结束并转文字</div>
+
+  <script>
+    const Streamlit = {
+      setComponentValue: (v) => window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: v }, "*"),
+      setFrameHeight: (h) => window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*"),
+      setComponentReady: () => window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*"),
+    };
+
+    const voiceBtn = document.getElementById("voiceBtn");
+    const hint = document.getElementById("hint");
+
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let mediaStream = null;
+    let mimeType = "audio/webm";
+    let isRecording = false;
+
+    function pickMimeType() {
+      const candidates = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+      for (const t of candidates) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return "audio/webm";
+    }
+
+    function setRecordingUI(on) {
+      isRecording = on;
+      voiceBtn.classList.toggle("recording", on);
+      voiceBtn.textContent = on ? "点击结束" : "语音识别";
+      hint.textContent = on ? "正在录音，说完后请点击「点击结束」" : "点击开始录音，再次点击结束并转文字";
+    }
+
+    function stopTracks() {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((t) => t.stop());
+        mediaStream = null;
+      }
+    }
+
+    async function toggleRecording(e) {
+      e.preventDefault();
+
+      if (!isRecording) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          hint.textContent = "当前浏览器不支持麦克风";
+          hint.classList.add("error");
+          return;
+        }
+        try {
+          hint.textContent = "正在请求麦克风权限…";
+          hint.classList.remove("error");
+          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mimeType = pickMimeType();
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+          mediaRecorder.ondataavailable = (ev) => {
+            if (ev.data && ev.data.size > 0) audioChunks.push(ev.data);
+          };
+          mediaRecorder.start();
+          setRecordingUI(true);
+        } catch (err) {
+          hint.textContent = "请允许麦克风权限后重试";
+          hint.classList.add("error");
+          stopTracks();
+        }
+        return;
+      }
+
+      setRecordingUI(false);
+      hint.textContent = "正在处理语音…";
+
+      mediaRecorder.onstop = () => {
+        stopTracks();
+        if (!audioChunks.length) {
+          hint.textContent = "未录到声音，请重试";
+          hint.classList.add("error");
+          return;
+        }
+        const blob = new Blob(audioChunks, { type: mimeType });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = String(reader.result).split(",")[1] || "";
+          Streamlit.setComponentValue("__AUDIO__|" + mimeType + "|" + b64);
+          hint.textContent = "已发送，正在识别…";
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+    }
+
+    voiceBtn.addEventListener("click", toggleRecording);
+
+    Streamlit.setComponentReady();
+    Streamlit.setFrameHeight(78);
+  </script>
+</body>
+</html>

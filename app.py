@@ -909,7 +909,7 @@ def render_home_tab() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="FindIt 找到了么",
+        page_title="📦 FindIt 找到了么",
         page_icon="📦",
         layout="wide",
         initial_sidebar_state="collapsed",

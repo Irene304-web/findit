@@ -1,16 +1,27 @@
 """
 FindIt 视觉寻物小助手 — 云端完全体
-ImgBB 永久图床 + GitHub 云账本 + Gemini 2.5 Flash 多物品识别
+ImgBB 永久图床 + GitHub 云账本 + Gemini 3.5 Flash 多物品识别
 """
 
 import hashlib
+import json
 import os
+import re
 
 import streamlit as st
+from google import genai
+from google.genai import types
 
 from components.mobile_capture import mobile_capture_input
 from components.voice_input import voice_recognition_button
-from services.gemini_vision import GeminiVisionError, recognize_multiple_items, transcribe_audio
+from services.gemini_vision import (
+    GEMINI_MODEL,
+    ITEMS_JSON_SCHEMA,
+    MULTI_ITEM_PROMPT,
+    GeminiVisionError,
+    compress_to_jpeg,
+    transcribe_audio,
+)
 from services.github_db import (
     GitHubDBError,
     load_global_database,
@@ -27,27 +38,17 @@ def _get_gemini_api_key() -> str:
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
         try:
-            key = st.secrets.get("GEMINI_API_KEY", "")
+            key = st.secrets["GEMINI_API_KEY"]
         except Exception:
             pass
     return key or ""
-
-
-def _get_gemini_api_base() -> str:
-    base = os.environ.get("GEMINI_API_BASE", "")
-    if not base:
-        try:
-            base = st.secrets.get("GEMINI_API_BASE", "")
-        except Exception:
-            pass
-    return (base or "https://generativelanguage.googleapis.com").rstrip("/")
 
 
 def _get_imgbb_api_key() -> str:
     key = os.environ.get("IMGBB_API_KEY", "")
     if not key:
         try:
-            key = st.secrets.get("IMGBB_API_KEY", "")
+            key = st.secrets["IMGBB_API_KEY"]
         except Exception:
             pass
     return key or ""
@@ -57,11 +58,119 @@ def _get_github_config() -> tuple[str, str]:
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("GITHUB_REPO", "")
     try:
-        token = token or st.secrets.get("GITHUB_TOKEN", "")
-        repo = repo or st.secrets.get("GITHUB_REPO", "")
+        token = token or st.secrets["GITHUB_TOKEN"]
+        repo = repo or st.secrets["GITHUB_REPO"]
     except Exception:
         pass
     return token or "", repo or ""
+
+
+# ── Gemini 多物品识别（官方 SDK + 强锁 JSON 数组）────────────
+def _gemini_client(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
+
+
+def _items_generate_config() -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=512,
+        response_mime_type="application/json",
+        response_schema=ITEMS_JSON_SCHEMA,
+    )
+
+
+def items_from_gemini_response(response) -> list[str]:
+    """从 Gemini 响应中鲁棒解析物品名称，保证返回干净的字符串列表。"""
+    text_content = (response.text or "").strip()
+    if not text_content:
+        raise GeminiVisionError("Gemini 未返回识别结果。")
+
+    if text_content.startswith("```"):
+        parts = text_content.split("```")
+        if len(parts) >= 3:
+            text_content = parts[1].strip()
+            if text_content.startswith("json"):
+                text_content = text_content[4:].strip()
+
+    try:
+        data = json.loads(text_content)
+    except json.JSONDecodeError as exc:
+        raise GeminiVisionError("Gemini 返回格式无法解析。") from exc
+
+    if isinstance(data, list):
+        final_list = data
+    elif isinstance(data, dict):
+        final_list = []
+        for val in data.values():
+            if isinstance(val, list):
+                final_list = val
+                break
+        if not final_list:
+            final_list = list(data.keys())
+    else:
+        final_list = [str(data)]
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in final_list:
+        name = re.sub(r'["""\'「」【】\[\]]', "", str(item).strip())
+        name = name or "未知物品"
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names or ["未知物品"]
+
+
+def recognize_items_from_image(image_bytes: bytes, api_key: str) -> list[str]:
+    """ImgBB 上传完成后，用 Gemini 3.5 Flash 识别图中所有物品，返回干净 JSON 数组。"""
+    if not api_key:
+        raise GeminiVisionError("GEMINI_API_KEY 未配置，请在 .streamlit/secrets.toml 中设置。")
+    if not image_bytes:
+        raise GeminiVisionError("图片数据为空。")
+
+    jpeg_bytes = compress_to_jpeg(image_bytes)
+    client = _gemini_client(api_key)
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"),
+                types.Part.from_text(text=MULTI_ITEM_PROMPT),
+            ],
+            config=_items_generate_config(),
+        )
+    except Exception as exc:
+        raise GeminiVisionError(
+            "Gemini API 调用失败。云端服务器会代为访问 Google，手机无需 VPN。"
+            f" 详情: {exc}"
+        ) from exc
+
+    return items_from_gemini_response(response)
+
+
+def commit_items_to_github(
+    item_names: list[str],
+    location: str,
+    img_url: str,
+    token: str,
+    repo: str,
+) -> list[dict]:
+    """解析物品数组，逐条写入 GitHub findit_db.json（共用同一张合照 img_url）。"""
+    records: list[dict] = []
+    for name in item_names:
+        records.append(make_item_record(name, location, img_url))
+
+    new_pool = list(st.session_state.get("items_pool", [])) + records
+    save_global_database(
+        new_pool,
+        token,
+        repo,
+        message=f"Add {len(records)} items",
+    )
+    st.session_state.items_pool = new_pool
+    st.session_state.github_sync_ok = True
+    return records
 
 
 # ── 云端账本 ────────────────────────────────────────────────
@@ -180,14 +289,13 @@ def _text_input_with_voice(label: str, field_key: str, placeholder: str = "") ->
     if raw_voice:
         if raw_voice.startswith("__AUDIO__|"):
             gemini_key = _get_gemini_api_key()
-            gemini_base = _get_gemini_api_base()
             if not gemini_key:
                 st.error("请配置 GEMINI_API_KEY 以使用语音输入。")
             else:
                 try:
                     _, mime, b64 = raw_voice.split("|", 2)
                     with st.spinner("🎤 正在识别语音…"):
-                        voice_text = transcribe_audio(b64, mime, gemini_key, gemini_base)
+                        voice_text = transcribe_audio(b64, mime, gemini_key)
                     st.session_state[field_key] = voice_text
                     st.rerun()
                 except GeminiVisionError as exc:
@@ -202,9 +310,16 @@ def _text_input_with_voice(label: str, field_key: str, placeholder: str = "") ->
 
 def _clear_capture_state() -> None:
     keys_to_clear = [
-        "last_image_hash", "image_bytes", "detected_items", "item_name_fields",
-        "mobile_capture", "mobile_upload", "submit_locked",
-        "last_saved_records", "location_field",
+        "last_image_hash",
+        "image_bytes",
+        "img_url",
+        "detected_items",
+        "item_name_fields",
+        "mobile_capture",
+        "mobile_upload",
+        "submit_locked",
+        "last_saved_records",
+        "location_field",
     ]
     for key in list(st.session_state.keys()):
         if key in keys_to_clear or key.startswith("item_field_") or key.startswith("input_item_field_"):
@@ -212,6 +327,7 @@ def _clear_capture_state() -> None:
 
 
 def _process_captured_image(image_bytes: bytes) -> None:
+    """流程：ImgBB 永久图床 → Gemini JSON 数组识物。"""
     if st.session_state.get("submit_locked"):
         return
     image_hash = hashlib.md5(image_bytes).hexdigest()
@@ -221,16 +337,29 @@ def _process_captured_image(image_bytes: bytes) -> None:
     st.session_state.last_image_hash = image_hash
     st.session_state.image_bytes = image_bytes
 
+    imgbb_key = _get_imgbb_api_key()
     gemini_key = _get_gemini_api_key()
-    gemini_base = _get_gemini_api_base()
+    if not imgbb_key:
+        st.warning("未配置 IMGBB_API_KEY，无法上传图片。")
+        return
+
+    with st.spinner("📤 正在上传图片至 ImgBB 永久图床…"):
+        try:
+            img_url = upload_to_imgbb(image_bytes, imgbb_key)
+            st.session_state.img_url = img_url
+        except ImgBBUploadError as exc:
+            st.error(str(exc))
+            return
+
     if not gemini_key:
         st.session_state.detected_items = ["未知物品"]
+        st.session_state.item_field_0 = "未知物品"
         st.warning("未配置 GEMINI_API_KEY，请手动填写物品名称。")
         return
 
     with st.spinner("🔍 Gemini 正在识别图中所有物品…"):
         try:
-            items = recognize_multiple_items(image_bytes, gemini_key, gemini_base)
+            items = recognize_items_from_image(image_bytes, gemini_key)
             st.session_state.detected_items = items
             for i, name in enumerate(items):
                 st.session_state[f"item_field_{i}"] = name
@@ -254,10 +383,13 @@ def _render_cloud_save_form() -> None:
         return
 
     detected = st.session_state.get("detected_items", ["未知物品"])
+    img_url = st.session_state.get("img_url", "")
     st.success(f"✨ Gemini 识别到 **{len(detected)}** 个物品，请确认名称并填写放置位置")
+    if img_url:
+        st.caption(f"📎 合照已上传：{img_url}")
 
     st.markdown(
-        f'<div class="suggest-card">AI 建议：{", ".join(detected)}</div>',
+        f'<div class="suggest-card">AI 建议：{json.dumps(detected, ensure_ascii=False)}</div>',
         unsafe_allow_html=True,
     )
 
@@ -300,41 +432,35 @@ def _render_cloud_save_form() -> None:
         st.error("请填写放置位置。")
         return
 
-    imgbb_key = _get_imgbb_api_key()
+    img_url = st.session_state.get("img_url", "")
     token, repo = _get_github_config()
-    if not imgbb_key:
-        st.error("未配置 IMGBB_API_KEY。")
+    if not img_url:
+        st.error("图片尚未上传至 ImgBB，请重新拍照。")
         return
     if not token or not repo:
         st.error("未配置 GITHUB_TOKEN 或 GITHUB_REPO。")
         return
 
-    with st.spinner("正在上传图片并同步至 GitHub …"):
+    with st.spinner("正在批量写入 GitHub 云账本…"):
         try:
-            img_url = upload_to_imgbb(st.session_state.image_bytes, imgbb_key)
-            records = [
-                make_item_record(name, location.strip(), img_url) for name in valid_names
-            ]
-            new_pool = list(st.session_state.get("items_pool", [])) + records
-            save_global_database(
-                new_pool,
+            records = commit_items_to_github(
+                valid_names,
+                location.strip(),
+                img_url,
                 token,
                 repo,
-                message=f"Add {len(records)} items",
             )
-            st.session_state.items_pool = new_pool
-            st.session_state.github_sync_ok = True
             st.session_state.submit_locked = True
             st.session_state.last_saved_records = records
             st.balloons()
             st.rerun()
-        except (ImgBBUploadError, GitHubDBError) as exc:
+        except GitHubDBError as exc:
             st.error(str(exc))
 
 
 def render_add_tab() -> None:
     st.subheader("📥 物品录入")
-    st.caption("拍照 → Gemini 识别多个物品 → 语音/文字填写 → 一键存入云端")
+    st.caption("拍照 → ImgBB 永久图床 → Gemini 识别多个物品 → 语音/文字填写 → 一键存入云端")
 
     if st.session_state.get("submit_locked"):
         _render_cloud_save_form()

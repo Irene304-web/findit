@@ -142,7 +142,12 @@ def save_global_database(
     raise last_error or GitHubDBError("写入 GitHub 账本失败，请稍后重试。")
 
 
-def make_item_record(name: str, location: str, img_url: str) -> dict:
+def make_item_record(
+    name: str,
+    location: str,
+    img_url: str,
+    home: str = "默认家庭",
+) -> dict:
     """按数据契约生成一条物品记录。"""
     now = datetime.now()
     suffix = secrets.token_hex(2)
@@ -150,6 +155,7 @@ def make_item_record(name: str, location: str, img_url: str) -> dict:
         "id": f"{now.strftime('%Y%m%d_%H%M%S')}_{suffix}",
         "name": name.strip(),
         "location": location.strip(),
+        "home": home.strip() or "默认家庭",
         "img_url": img_url.strip(),
         "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
     }

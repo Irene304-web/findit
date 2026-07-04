@@ -71,34 +71,66 @@ def compress_to_jpeg(image_bytes: bytes, max_edge: int = GEMINI_MAX_EDGE) -> byt
 
 
 def _clean_name(raw: str) -> str:
-    name = re.sub(r'["""\'「」【】\[\]]', "", (raw or "").strip())
+    name = re.sub(r'["""\'「」【】\[\]{}]', "", (raw or "").strip())
+    name = re.sub(r"\s+", " ", name).strip()
     return name or "未知物品"
 
 
-def parse_items_json(text: str) -> list[str]:
-    text = text.strip()
+def _strip_json_markdown(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return text
+
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s*```$", "", text).strip()
+
+    return text
+
+
+def _extract_item_list(data) -> list:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("items", "objects", "names", "results"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+        for val in data.values():
+            if isinstance(val, list):
+                return val
+        return list(data.keys())
+    return [str(data)]
+
+
+def parse_items_json(text: str) -> list[str]:
+    text = _strip_json_markdown(text)
+    if not text:
+        raise GeminiVisionError("Gemini 未返回识别结果。")
 
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise GeminiVisionError("Gemini 返回格式无法解析。") from exc
+    except json.JSONDecodeError:
+        array_match = re.search(r"\[[\s\S]*\]", text)
+        if array_match:
+            try:
+                data = json.loads(array_match.group(0))
+            except json.JSONDecodeError as exc:
+                raise GeminiVisionError("Gemini 返回格式无法解析。") from exc
+        else:
+            raise GeminiVisionError("Gemini 返回格式无法解析。")
 
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        items = data.get("items", [])
-    else:
-        raise GeminiVisionError("Gemini 返回的不是 JSON 数组。")
-
-    if not isinstance(items, list):
+    final_list = _extract_item_list(data)
+    if not isinstance(final_list, list):
         raise GeminiVisionError("Gemini 返回的 items 不是列表。")
 
     names: list[str] = []
     seen: set[str] = set()
-    for item in items:
+    for item in final_list:
         name = _clean_name(str(item))
         if name and name not in seen:
             seen.add(name)

@@ -1,33 +1,17 @@
---
+---
+description: 寻物小助手(FindIt)智能寻物双重过滤与图片修复业务规则
+globs: *.py
 alwaysApply: true
 ---
-# 🛰️ FindIt 项目全局核心记忆卡 (Project Memory)
+# 🛰️ FindIt 智能寻物多维过滤与视觉修复记忆卡
 
-## 1. 基础背景与主权人
-- **项目名称**：FindIt 视觉寻物小助手
-- **核心定位**：全家多端设备共享、图片永不丢失的智能视觉寻物保险箱。
-- **当前状态**：云端完全体已上线（ImgBB 图床 + GitHub 云账本 + GLM 视觉识别）。
+## 1. 基础配置与清爽样式纪律
+- **网页副标题**：锁死为 `"家庭云端收纳，AI智能识物存储，轻松记得东西放在哪里"`。
+- **寻物检索按钮**：智能寻物页面的刷新检索按钮文案必须严格修改为 `"🔍 一键找到它"`。
+- **界面样式**：保持原汁原味的原生轻量文字布局，严禁引入任何固定底部的重型 CSS 样式。
 
-## 2. 核心技术栈与死锁规则 (Tech Stack Lock)
-AI 必须严格遵守以下技术选型，严禁引入任何未授权的重型第三方库：
-- **Web 框架**：纯 Python 的 `Streamlit`（完全依赖原生组件，禁止编写复杂的自定义 HTML/Flexbox 布局）。
-- **图片永久存储**：`ImgBB` 官方 API（通过 base64 编码图片流进行 POST 上传）。
-- **AI 视觉识别**：Google Gemini `gemini-3.5-flash`（云端服务器调用，手机无需 VPN）。
-- **部署方式**：Streamlit Community Cloud（`share.streamlit.io`），手机通过 HTTPS 公网 URL 访问。
-- **密码箱调用**：必须通过 `st.secrets` 安全获取密钥，严禁把密码硬编码在代码中。
-  - `st.secrets["IMGBB_API_KEY"]` -> ImgBB 密钥
-  - `st.secrets["GITHUB_TOKEN"]` -> GitHub 密令
-  - `st.secrets["GITHUB_REPO"]` -> 远程仓库名（格式：用户名/仓库名）
-  - `st.secrets["GEMINI_API_KEY"]` -> Google AI Studio Gemini 密钥
-- **中心数据库**：GitHub 仓库根目录下的 `findit_db.json` 公用数据中心账本。
-
-## 3. 数据契约与账本格式 (Data Schema)
-云账本 `findit_db.json` 中的每条物品数据必须严格保持以下字典格式：
-```json
-{
-  "id": "UUID 或 时间戳字符串",
-  "name": "物品名称(支持模糊搜索)",
-  "location": "放置位置(支持模糊搜索)",
-  "img_url": "由 ImgBB 返回的永久 https://i.ibb.co/ 开头的图片直链",
-  "created_at": "YYYY-MM-DD HH:MM:SS"
-}
+## 2. 智能寻物“双重过滤”与“精准显图”重构规范
+1. **多家庭检索联动**：在 `render_search_tab()` 智能寻物页面顶部，必须在搜索框上方或并排引入一个家庭组筛选下拉框（`st.selectbox`）。其选项为 `["全部家庭组"] + st.session_state.all_homes`。
+2. **过滤过滤机制**：物品数据池（`results`）的清洗必须同时支持关键词和家庭组。若选中了特定家庭空间，则只保留 `item.get("home", "默认家庭")` 与选中空间完全一致的条目；若为 `"全部家庭组"`，则全局模糊检索。
+3. **精准显图控制（Bug 修复）**：在遍历 `results` 的循环内部，**必须且仅在用户输入了有效搜索关键词（即 `keyword.strip()` 不为空）且 `img_url` 存在时**，才允许渲染 `st.image(img_url, use_container_width=True)` 展示图片！若关键词为空，循环内部严禁渲染图片，只展示包含物品名称、家庭标签、放置位置和创建时间的纯文字卡片。
+4. **单项无痕删除**：每个物品卡片下方保留红色的“❌ 删除该物品”按钮，点击后依据 id 抹除，立即 commit 同步至 GitHub 并执行 `st.rerun()`。

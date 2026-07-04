@@ -9,6 +9,7 @@ import os
 import re
 
 import streamlit as st
+import streamlit.components.v1 as components
 from google import genai
 from google.genai import types
 
@@ -360,6 +361,42 @@ def search_cloud_items(keyword: str, pool: list[dict]) -> list[dict]:
 
 
 # ── 样式 ────────────────────────────────────────────────────
+def inject_app_icon(img_url: str) -> None:
+    """向手机浏览器 head 注入 PWA 桌面图标（iOS Safari / Android Chrome）。"""
+    url = img_url.strip()
+    if not url:
+        return
+    safe_url = json.dumps(url)
+    components.html(
+        f"""
+        <script>
+        (function () {{
+            var iconUrl = {safe_url};
+            var doc = window.parent.document;
+            var head = doc.head || doc.getElementsByTagName("head")[0];
+            if (!head) return;
+            function ensureLink(rel, sizes) {{
+                var sel = sizes
+                    ? 'link[rel="' + rel + '"][sizes="' + sizes + '"]'
+                    : 'link[rel="' + rel + '"]';
+                var link = head.querySelector(sel);
+                if (!link) {{
+                    link = doc.createElement("link");
+                    link.rel = rel;
+                    if (sizes) link.sizes = sizes;
+                    head.appendChild(link);
+                }}
+                link.href = iconUrl;
+            }}
+            ensureLink("apple-touch-icon");
+            ensureLink("icon", "192x192");
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def inject_mobile_css() -> None:
     st.markdown(
         """
@@ -877,6 +914,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="collapsed",
     )
+    inject_app_icon("https://i.ibb.co/tpGYgKsQ/IMG-1191.jpg")
     inject_mobile_css()
     ensure_items_pool_loaded()
     render_header()
